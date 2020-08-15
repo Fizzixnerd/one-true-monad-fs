@@ -5,6 +5,11 @@
 open System.Diagnostics
 open Serilog
 
+module Async =
+    let retn x = async.Return(x)
+    let bind f x = async.Bind(x, f)
+    let map f x = x |> bind (f >> retn)
+
 /// An `error` along with a `StackTrace`
 type Traced<'err> =
     { error: 'err
@@ -18,8 +23,14 @@ module Traced =
 
     /// Create a `StackTrace` for the given `err`
     let trace err =
+        let withSourceInfo =
+#if DEBUG
+            true
+#else
+            false
+#endif
         { error = err
-          trace = StackTrace(true) }
+          trace = StackTrace(withSourceInfo) }
 
 type Reader<'a, 'r> = 'r -> 'a
 
@@ -46,11 +57,11 @@ module OTM =
 
     /// Functor `map`
     let map (f: 'a -> 'b) (x: OTM<'a, 'r, 'err>) : OTM<'b, 'r, 'err> =
-        x |> Reader.map (AsyncResult.map f)
+        x |> Reader.map (Async.map (Result.map f))
 
     /// `map` for the `'err` type
     let mapError f (x: OTM<'a, 'r, 'err1>) : OTM<'a, 'r, 'err2> =
-        x |> Reader.map (AsyncResult.mapError (Traced.map f))
+        x |> Reader.map (Async.map (Result.mapError (Traced.map f)))
 
     /// `map` over the `Ok` and `Error` cases respectively
     let bimap onSuccess onError x =
@@ -64,10 +75,10 @@ module OTM =
     let run r (x: OTM<_, _, _>) = x r
 
     /// Reader `ask` lifted to `OTM`
-    let ask : OTM<'r, 'r, 'err> = AsyncResult.retn
+    let ask : OTM<'r, 'r, 'err> = fun x -> x |> Result.Ok |> Async.retn
 
     /// Reader `asks` lifted to `OTM`
-    let asks (f: 'r -> 'b) : OTM<_, _, 'err> = f >> AsyncResult.retn
+    let asks (f: 'r -> 'b) : OTM<_, _, 'err> = f >> Result.Ok >> Async.retn
 
     /// contravariant `map` of the `'r` type, lifted from `Reader`
     let withReader f (x: OTM<'a, 'r2, 'err>) : OTM<'a, 'r1, 'err> =
@@ -77,7 +88,7 @@ module OTM =
     let local f (x: OTM<_, 'r, 'err>) : OTM<_, 'r, 'err> = Reader.local f x
 
     /// Monadic `return`
-    let retn (x: 'a) : OTM<'a, 'r, 'err> = x |> AsyncResult.retn |> Reader.retn
+    let retn (x: 'a) : OTM<'a, 'r, 'err> = x |> Result.Ok |> Async.retn |> Reader.retn
 
     /// Monadic `bind`
     let bind (f: 'a -> OTM<'b, 'r, 'err>) (x: OTM<'a, 'r, 'err>) : OTM<'b, 'r, 'err> =
@@ -135,7 +146,13 @@ module OTM =
 
     /// Catch an exception if raised in an `OTM` and map it to an `'err`
     let catch f (x: OTM<_, 'r, 'err>) : OTM<_, 'r, 'err> =
-        fun r -> AsyncResult.catch (f >> Traced.trace) (x r)
+        fun r ->
+            x r
+            |> Async.Catch
+            |> Async.map
+                (function
+                 | Choice1Of2 x -> Ok x
+                 | Choice2Of2 e -> e |> f |> Traced.trace |> Error)
 
     // various lifting functions
 
@@ -153,7 +170,7 @@ module OTM =
     let ofAsync x : OTM<_, 'r, 'err> = fun _ -> x |> Async.map Result.Ok
 
     /// Obtain an OTM containing the Async portion of the computation
-    let asAsync (x: OTM<_, 'r, 'err>) : OTM<AsyncResult<'a, Traced<'err>>, 'r, 'err> =
+    let asAsync (x: OTM<_, 'r, 'err>) : OTM<Async<Result<'a, Traced<'err>>>, 'r, 'err> =
         fun r ->
             r |> retn (x r)
 
