@@ -1,0 +1,6 @@
+FSharp.Core
+Microsoft.Extensions.Configuration
+Microsoft.Extensions.Configuration.Json
+Serilog
+Serilog.Sinks.Console
+

@@ -1,0 +1,7 @@
+source https://api.nuget.org/v3/index.json
+
+nuget FSharp.Core
+nuget Microsoft.Extensions.Configuration
+nuget Microsoft.Extensions.Configuration.Json
+nuget Serilog
+nuget Serilog.Sinks.Console
