@@ -5,6 +5,7 @@
 open System.Diagnostics
 open Serilog
 
+/// An `error` along with a `StackTrace`
 type Traced<'err> =
     { error: 'err
       trace: StackTrace }
@@ -34,8 +35,8 @@ module Reader =
     let asks (f: 'r -> 'b) : Reader<_, _> = f
     let local (f: 'r -> 'r) x = withReader f x
 
-/// The One True Monad; contains the following effects:
-/// - `Reader` with reader state `'r`
+/// The One True Monad; encapsulates the following effects:
+/// - `Reader`
 /// - `Async`
 /// - `Result` with a `Traced` error component
 type OTM<'a, 'r, 'err> = Reader<Async<Result<'a, Traced<'err>>>, 'r>
