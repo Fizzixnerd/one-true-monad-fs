@@ -86,8 +86,6 @@ type OTM<'a, 'r, 'err> = Reader<Async<Result<'a, Traced<'err>>>, 'r>
 [<RequireQualifiedAccess>]
 module OTM =
 
-    open System
-
     /// Functor `map`
     let inline map (f: 'a -> 'b) (x: OTM<'a, 'r, 'err>) : OTM<'b, 'r, 'err> =
         x |> Reader.map (Async.map (Result.map f))
