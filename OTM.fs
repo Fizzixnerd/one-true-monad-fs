@@ -12,7 +12,7 @@ module Async =
     let inline map f x = x |> bind (f >> retn)
 
 module Result =
-    /// Analogous to applicative `traverse`, but taking an `Array` and returning
+    /// Analogous to Applicative `traverse`, but taking an `Array` and returning
     /// a `List`
     let traverseAtoL f (xs: _ array) =
         let (<!>) = Result.map
@@ -27,6 +27,8 @@ module Result =
         let x0 = Ok []
         Array.foldBack consM xs x0
 
+    /// Analogous to Applicative `sequence`, but taking an `Array` and returning
+    /// a `List`
     let sequenceAtoL xs = traverseAtoL id xs
 
 /// An `error` along with a `StackTrace`
@@ -49,29 +51,32 @@ module Traced =
         { error = f x.error
           trace = x.trace }
 
-    /// Create a `StackTrace` for the given `err`
-    let trace err =
+    /// Create a `StackTrace` for the given `err` and return it in a
+    /// `Traced<'err>`
+    let trace err : Traced<'err> =
         { error = err
           trace = StackTrace(withSourceInfo) }
 
-type Reader<'a, 'r> = 'r -> 'a
+type Reader<'a, 'r> = ('r -> 'a)
 
 [<RequireQualifiedAccess>]
 module Reader =
 
-    let inline map f (x: Reader<_, _>) : Reader<_, _> = x >> f
-    let inline withReader f (x: Reader<_, _>) : Reader<_, _> = f >> x
+    let inline run r (x: Reader<'a, 'r>) = x r
+    let inline ofFunction f : Reader<'a, 'r> = f
 
-    let inline retn x : Reader<_, _> = fun _ -> x
-    let inline join (x: Reader<Reader<_, _>, _>) : Reader<_, _> =
-        fun r -> (x r) r
-    let inline bind (f: _ -> Reader<_, _>) (x: Reader<_, _>) : Reader<_, _> = x |> map f |> join
+    let inline map f x : Reader<_, _> = ofFunction (x >> f)
+    let inline withReader f x : Reader<_, _> = ofFunction (f >> x)
 
-    let ask: Reader<_, _> = id
-    let inline asks (f: 'r -> 'b) : Reader<_, _> = f
+    let inline retn x : Reader<_, _> = ofFunction (fun _ -> x)
+    let inline join (x: Reader<Reader<_, 'r>, 'r>) : Reader<'a, 'r> =
+        ofFunction (fun r -> run r (run r x))
+    let inline bind (f: _ -> Reader<_, 'r>) (x: Reader<_, _>) : Reader<_, _> = x |> map f |> join
+
+    let inline ask x = x
+    let inline asks (f: 'r -> 'b) : Reader<_, _> = ofFunction f
     let inline local (f: 'r -> 'r) x = withReader f x
 
-    let inline run r (x: Reader<_, _>) = x r
 
 /// The One True Monad; encapsulates the following effects:
 /// - `Reader`
@@ -81,6 +86,8 @@ type OTM<'a, 'r, 'err> = Reader<Async<Result<'a, Traced<'err>>>, 'r>
 
 [<RequireQualifiedAccess>]
 module OTM =
+
+    open System
 
     /// Functor `map`
     let inline map (f: 'a -> 'b) (x: OTM<'a, 'r, 'err>) : OTM<'b, 'r, 'err> =
@@ -99,13 +106,13 @@ module OTM =
     // various Reader functions
 
     /// Reader `run` lifted to `OTM`
-    let run r (x: OTM<_, _, _>) = Reader.run r x
+    let inline run r (x: OTM<_, _, _>) = Reader.run r x
 
     /// Reader `run >> Async.RunSynchronously` lifted to `OTM`
     let runSynchronously r x = run r x |> Async.RunSynchronously
 
     /// Reader `ask` lifted to `OTM`
-    let ask : OTM<'r, 'r, 'err> = fun x -> x |> Result.Ok |> Async.retn
+    let ask r = r |> Result.Ok |> Async.retn
 
     /// Reader `asks` lifted to `OTM`
     let inline asks (f: 'r -> 'b) : OTM<_, _, 'err> = f >> Result.Ok >> Async.retn
@@ -124,8 +131,8 @@ module OTM =
     let inline bind (f: 'a -> OTM<'b, 'r, 'err>) (x: OTM<'a, 'r, 'err>) : OTM<'b, 'r, 'err> =
         fun r ->
             async {
-                match! x r with
-                | Ok x -> return! (f x) r
+                match! run r x with
+                | Ok x -> return! run r (f x)
                 | Error e -> return Error e
             }
 
@@ -133,7 +140,7 @@ module OTM =
     let inline join (x: OTM<_, 'r, 'err>) = x |> bind id
 
     /// Applicative `apply`
-    let apply f x : OTM<_, 'r, 'err> = f |> bind (fun f' -> x |> bind (fun x' -> f' x' |> retn))
+    let inline apply f x : OTM<_, 'r, 'err> = f |> bind (fun f' -> x |> bind (fun x' -> f' x' |> retn))
 
     /// Applicative `lift2`
     let lift2 f x y : OTM<_, 'r, 'err> =
@@ -173,7 +180,7 @@ module OTM =
     let parallel' (xs: OTM<_, 'r, 'err> array) : OTM<_ list, 'r, 'err> =
         fun r ->
             xs
-            |> Array.Parallel.map (fun x -> x r)
+            |> Array.Parallel.map (fun x -> run r x)
             |> Async.Parallel
             |> Async.map Result.sequenceAtoL
 
@@ -183,7 +190,7 @@ module OTM =
     /// Catch an exception if raised in an `OTM` and map it to an `'err`, preserving the `StackTrace`
     let catch f (x: OTM<_, 'r, 'err>) : OTM<_, 'r, 'err> =
         fun r ->
-            x r
+            run r x
             |> Async.Catch
             |> Async.map
                 (function
@@ -207,8 +214,7 @@ module OTM =
 
     /// Obtain an OTM containing the Async portion of the computation
     let asAsync (x: OTM<_, 'r, 'err>) : OTM<Async<Result<'a, Traced<'err>>>, 'r, 'err> =
-        fun r ->
-            r |> retn (x r)
+        fun r -> run r (retn (run r x))
 
     /// Lift a `Result<'a, 'err>` into an `OTM`, creating a stack trace if it is
     /// a `Result.Error`
@@ -220,8 +226,8 @@ module OTM =
     let asResult (x: OTM<_, 'r, 'err>) : OTM<Result<'a, 'err>, 'r, 'err> =
         fun r ->
             async {
-                let! res = x r
-                return! (retn (res |> Result.mapError (fun x -> x.error))) r
+                let! res = run r x
+                return! run r (retn (res |> Result.mapError (fun x -> x.error)))
             }
 
     /// Lift a `Result<'a, Traced<'err>` into an `OTM`, leaving the `StackTrace`
@@ -237,14 +243,14 @@ module OTM =
     /// otm {
     ///     match! x |> OTM.asTracedResult with
     ///     | Ok x' -> return f x'
-    ///     | Error e -> return! g e
+    ///     | Error e -> printf "Error: %O with StackTrace %O" e.error e.trace
     /// }
     /// ```
     let asTracedResult (x: OTM<_, 'r, 'err>) : OTM<Result<'a, Traced<'err>>, 'r, 'err> =
         fun r ->
             async {
-                let! res = x r
-                return! (retn res) r
+                let! res = run r x
+                return! run r (retn res)
             }
 
     /// `Async.Sleep : int -> Async<unit>` lifted into an `OTM`
@@ -274,18 +280,18 @@ module OTM =
     let handle f (x: OTM<_, 'r, 'err1>) : OTM<_, 'r, 'err2> =
         fun r ->
             async {
-                match! x r with
+                match! run r x with
                 | Ok x' -> return Ok x'
-                | Error tracedError -> return! (f tracedError.error) r
+                | Error tracedError -> return! run r (f tracedError.error)
             }
 
     /// Like `OTM.handle`, but with access to the `StackTrace` of the `'err`
     let handleTraced (f: Traced<'err1> -> OTM<_, _, _>) (x: OTM<_, 'r, 'err1>) : OTM<_, 'r, 'err2> =
         fun r ->
             async {
-                match! x r with
+                match! run r x with
                 | Ok x' -> return Ok x'
-                | Error tracedError -> return! f tracedError r
+                | Error tracedError -> return! run r (f tracedError)
             }
 
     module Operators =
@@ -353,6 +359,7 @@ module OTMComputationExpression =
         member this.Combine (a,b) =
             this.Bind(a, fun () -> b())
 
+    /// Builds a OTM using computation expression syntax
     let otm = OTMBuilder()
 
 module Example =
