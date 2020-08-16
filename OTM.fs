@@ -72,7 +72,7 @@ module Reader =
         fun r -> run r (run r x)
     let inline bind (f: _ -> Reader<_, 'r>) (x: Reader<_, _>) : Reader<_, _> = x |> map f |> join
 
-    let inline ask x = x
+    let ask : Reader<'r, 'r> = id
     let inline asks (f: 'r -> 'b) : Reader<_, _> = f
     let inline local (f: 'r -> 'r) x = withReader f x
 
@@ -109,7 +109,7 @@ module OTM =
     let runSynchronously r x = run r x |> Async.RunSynchronously
 
     /// Reader `ask` lifted to `OTM`
-    let ask r = r |> Result.Ok |> Async.retn
+    let ask: OTM<'r, 'r, 'err> = fun x -> x |> Result.Ok |> Async.retn
 
     /// Reader `asks` lifted to `OTM`
     let inline asks (f: 'r -> 'b) : OTM<_, _, 'err> = f >> Result.Ok >> Async.retn
