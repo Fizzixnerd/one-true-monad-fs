@@ -53,6 +53,8 @@ module Reader =
     let asks (f: 'r -> 'b) : Reader<_, _> = f
     let local (f: 'r -> 'r) x = withReader f x
 
+    let run r (x: Reader<_, _>) = x r
+
 /// The One True Monad; encapsulates the following effects:
 /// - `Reader`
 /// - `Async`
@@ -79,10 +81,10 @@ module OTM =
     // various Reader functions
 
     /// Reader `run` lifted to `OTM`
-    let run r (x: OTM<_, _, _>) = x r
+    let run r (x: OTM<_, _, _>) = Reader.run r x
 
     /// Reader `run >> Async.RunSynchronously` lifted to `OTM`
-    let runSynchronously r x = x r |> Async.RunSynchronously
+    let runSynchronously r x = run r x |> Async.RunSynchronously
 
     /// Reader `ask` lifted to `OTM`
     let ask : OTM<'r, 'r, 'err> = fun x -> x |> Result.Ok |> Async.retn
@@ -90,7 +92,7 @@ module OTM =
     /// Reader `asks` lifted to `OTM`
     let asks (f: 'r -> 'b) : OTM<_, _, 'err> = f >> Result.Ok >> Async.retn
 
-    /// contravariant `map` of the `'r` type, lifted from `Reader`
+    /// contravariant `map` of the `'r` type, lifted from `Reader` into `OTM`
     let withReader f (x: OTM<'a, 'r2, 'err>) : OTM<'a, 'r1, 'err> =
         x |> Reader.withReader f
 
@@ -108,6 +110,9 @@ module OTM =
                 | Ok x -> return! (f x) r
                 | Error e -> return Error e
             }
+
+    /// Monadic `join`
+    let join (x: OTM<_, 'r, 'err>) = x |> bind id
 
     /// Applicative `apply`
     let apply f x : OTM<_, 'r, 'err> = f |> bind (fun f' -> x |> bind (fun x' -> f' x' |> retn))
@@ -145,7 +150,7 @@ module OTM =
     /// `ignore` lifted to `OTM`
     let ignore (x: OTM<_, 'r, 'err>) : OTM<_, 'r, 'err> = x |> map ignore
 
-    /// Catch an exception if raised in an `OTM` and map it to an `'err`
+    /// Catch an exception if raised in an `OTM` and map it to an `'err`, preserving the `StackTrace`
     let catch f (x: OTM<_, 'r, 'err>) : OTM<_, 'r, 'err> =
         fun r ->
             x r
@@ -153,7 +158,10 @@ module OTM =
             |> Async.map
                 (function
                  | Choice1Of2 x -> Ok x
-                 | Choice2Of2 e -> e |> f |> Traced.trace |> Error)
+                 | Choice2Of2 e ->
+                     Error
+                         { error = f e
+                           trace = StackTrace(e) })
 
     // various lifting functions
 
@@ -161,7 +169,7 @@ module OTM =
     /// of this function
     let throw x : OTM<_, 'r, 'err> = x |> Traced.trace |> Result.Error |> Async.retn |> Reader.retn
 
-    /// Lift an already `Traced<'err>` into an `OTM`
+    /// Lift an already `Traced<'err>` into an `OTM`, leaving the `StackTrace` as-is
     let rethrow x : OTM<_, 'r, 'err> = x |> Result.Error |> Async.retn |> Reader.retn
 
     /// Lift an `Async` computation into an `OTM`
@@ -195,7 +203,7 @@ module OTM =
     ///
     /// ```
     /// otm {
-    ///     match! x |> OTM.asResult with
+    ///     match! x |> OTM.asTracedResult with
     ///     | Ok x' -> return f x'
     ///     | Error e -> return! g e
     /// }
@@ -302,6 +310,7 @@ module OTMComputationExpression =
                     | null -> ()
                     | disp -> disp.Dispose())
 
+        // TODO: Is this even correct?
         member this.For(sequence:seq<_>, body: 'e -> OTM<_, 'r, 'err>) =
                 this.Using(sequence.GetEnumerator(),fun enum ->
                     async {
