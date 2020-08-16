@@ -12,7 +12,9 @@ module Async =
     let map f x = x |> bind (f >> retn)
 
 module Result =
-    let traverse f (xs: Result<_, _> list) =
+    /// Analogous to applicative `traverse`, but taking an `Array` and returning
+    /// a `List`
+    let traverseAtoL f (xs: _ array) =
         let (<!>) = Result.map
         let (<*>) f x =
             match f, x with
@@ -23,9 +25,9 @@ module Result =
         let cons y ys = y :: ys
         let consM y ys = cons <!> f y <*> ys
         let x0 = Ok []
-        List.foldBack consM xs x0
+        Array.foldBack consM xs x0
 
-    let sequence xs = traverse id xs
+    let sequenceAtoL xs = traverseAtoL id xs
 
 /// An `error` along with a `StackTrace`
 type Traced<'err> =
@@ -163,6 +165,18 @@ module OTM =
     /// Applicative `sequence`, specialized to lists
     let sequence xs : OTM<_, 'r, 'err> = traverse id xs
 
+    /// Similar to `Async.Parallel`, but for `OTM`; note the use of `array` and
+    /// `list` in the signature
+    ///
+    /// Always O(n) because of the need to sequence in the `Result`s, but
+    /// performs the actual `OTM` computations in parallel
+    let parallel' (xs: OTM<_, 'r, 'err> array) : OTM<_ list, 'r, 'err> =
+        fun r ->
+            xs
+            |> Array.Parallel.map (fun x -> x r)
+            |> Async.Parallel
+            |> Async.map Result.sequenceAtoL
+
     /// `ignore` lifted to `OTM`
     let ignore (x: OTM<_, 'r, 'err>) : OTM<_, 'r, 'err> = x |> map ignore
 
@@ -235,13 +249,6 @@ module OTM =
 
     /// `Async.Sleep : int -> Async<unit>` lifted into an `OTM`
     let sleep (ms: int) : OTM<_, 'r, 'err> = Async.Sleep ms |> ofAsync
-
-    let parallel' (xs: seq<OTM<_, 'r, 'err>>) : OTM<_ array, 'r, 'err> =
-        fun r ->
-            xs
-            |> Seq.map (fun x -> x r)
-            |> Async.Parallel
-            |> Async.map (List.ofArray >> Result.sequence >> Result.map Array.ofList)
 
     /// Handle an error in the same manner of a `try ... with` block:
     ///
