@@ -7,9 +7,9 @@ open System.Diagnostics
 [<RequireQualifiedAccess>]
 module Async =
 
-    let retn x = async.Return(x)
-    let bind f x = async.Bind(x, f)
-    let map f x = x |> bind (f >> retn)
+    let inline retn x = async.Return(x)
+    let inline bind f x = async.Bind(x, f)
+    let inline map f x = x |> bind (f >> retn)
 
 module Result =
     /// Analogous to applicative `traverse`, but taking an `Array` and returning
@@ -59,19 +59,19 @@ type Reader<'a, 'r> = 'r -> 'a
 [<RequireQualifiedAccess>]
 module Reader =
 
-    let map f (x: Reader<_, _>) : Reader<_, _> = x >> f
-    let withReader f (x: Reader<_, _>) : Reader<_, _> = f >> x
+    let inline map f (x: Reader<_, _>) : Reader<_, _> = x >> f
+    let inline withReader f (x: Reader<_, _>) : Reader<_, _> = f >> x
 
-    let retn x : Reader<_, _> = fun _ -> x
-    let join (x: Reader<Reader<_, _>, _>) : Reader<_, _> =
+    let inline retn x : Reader<_, _> = fun _ -> x
+    let inline join (x: Reader<Reader<_, _>, _>) : Reader<_, _> =
         fun r -> (x r) r
-    let bind (f: _ -> Reader<_, _>) (x: Reader<_, _>) : Reader<_, _> = x |> map f |> join
+    let inline bind (f: _ -> Reader<_, _>) (x: Reader<_, _>) : Reader<_, _> = x |> map f |> join
 
     let ask: Reader<_, _> = id
-    let asks (f: 'r -> 'b) : Reader<_, _> = f
-    let local (f: 'r -> 'r) x = withReader f x
+    let inline asks (f: 'r -> 'b) : Reader<_, _> = f
+    let inline local (f: 'r -> 'r) x = withReader f x
 
-    let run r (x: Reader<_, _>) = x r
+    let inline run r (x: Reader<_, _>) = x r
 
 /// The One True Monad; encapsulates the following effects:
 /// - `Reader`
@@ -83,11 +83,11 @@ type OTM<'a, 'r, 'err> = Reader<Async<Result<'a, Traced<'err>>>, 'r>
 module OTM =
 
     /// Functor `map`
-    let map (f: 'a -> 'b) (x: OTM<'a, 'r, 'err>) : OTM<'b, 'r, 'err> =
+    let inline map (f: 'a -> 'b) (x: OTM<'a, 'r, 'err>) : OTM<'b, 'r, 'err> =
         x |> Reader.map (Async.map (Result.map f))
 
     /// `map` for the `'err` type
-    let mapError f (x: OTM<'a, 'r, 'err1>) : OTM<'a, 'r, 'err2> =
+    let inline mapError f (x: OTM<'a, 'r, 'err1>) : OTM<'a, 'r, 'err2> =
         x |> Reader.map (Async.map (Result.mapError (Traced.map f)))
 
     /// `map` over the `Ok` and `Error` cases respectively
@@ -108,7 +108,7 @@ module OTM =
     let ask : OTM<'r, 'r, 'err> = fun x -> x |> Result.Ok |> Async.retn
 
     /// Reader `asks` lifted to `OTM`
-    let asks (f: 'r -> 'b) : OTM<_, _, 'err> = f >> Result.Ok >> Async.retn
+    let inline asks (f: 'r -> 'b) : OTM<_, _, 'err> = f >> Result.Ok >> Async.retn
 
     /// contravariant `map` of the `'r` type, lifted from `Reader` into `OTM`
     let withReader f (x: OTM<'a, 'r2, 'err>) : OTM<'a, 'r1, 'err> =
@@ -118,10 +118,10 @@ module OTM =
     let local f (x: OTM<_, 'r, 'err>) : OTM<_, 'r, 'err> = Reader.local f x
 
     /// Monadic `return`
-    let retn (x: 'a) : OTM<'a, 'r, 'err> = x |> Result.Ok |> Async.retn |> Reader.retn
+    let inline retn (x: 'a) : OTM<'a, 'r, 'err> = x |> Result.Ok |> Async.retn |> Reader.retn
 
     /// Monadic `bind`
-    let bind (f: 'a -> OTM<'b, 'r, 'err>) (x: OTM<'a, 'r, 'err>) : OTM<'b, 'r, 'err> =
+    let inline bind (f: 'a -> OTM<'b, 'r, 'err>) (x: OTM<'a, 'r, 'err>) : OTM<'b, 'r, 'err> =
         fun r ->
             async {
                 match! x r with
@@ -130,7 +130,7 @@ module OTM =
             }
 
     /// Monadic `join`
-    let join (x: OTM<_, 'r, 'err>) = x |> bind id
+    let inline join (x: OTM<_, 'r, 'err>) = x |> bind id
 
     /// Applicative `apply`
     let apply f x : OTM<_, 'r, 'err> = f |> bind (fun f' -> x |> bind (fun x' -> f' x' |> retn))
@@ -168,7 +168,7 @@ module OTM =
     /// Similar to `Async.Parallel`, but for `OTM`; note the use of `array` and
     /// `list` in the signature
     ///
-    /// Always O(n) because of the need to sequence in the `Result`s, but
+    /// Always O(n) because of the need to `sequence` the `Result`s, but
     /// performs the actual `OTM` computations in parallel
     let parallel' (xs: OTM<_, 'r, 'err> array) : OTM<_ list, 'r, 'err> =
         fun r ->
@@ -291,17 +291,17 @@ module OTM =
     module Operators =
 
         /// bind
-        let (>>=) x f : OTM<_, 'r, 'err> = x |> bind f
+        let inline (>>=) x f : OTM<_, 'r, 'err> = x |> bind f
         /// flip bind
-        let (=<<) f x : OTM<_, 'r, 'err> = x |> bind f
+        let inline (=<<) f x : OTM<_, 'r, 'err> = x |> bind f
         /// Kliesli composition
-        let (>=>) f g : _ -> OTM<_, 'r, 'err> = fun x -> x >>= f >>= g
+        let inline (>=>) f g : _ -> OTM<_, 'r, 'err> = fun x -> x >>= f >>= g
         /// flip Kliesli
-        let (<=<) g f : _ -> OTM<_, 'r, 'err> = fun x -> x >>= f >>= g
+        let inline (<=<) g f : _ -> OTM<_, 'r, 'err> = fun x -> x >>= f >>= g
         /// map
-        let (<!>) f x : OTM<_, 'r, 'err> = x |> map f
+        let inline (<!>) f x : OTM<_, 'r, 'err> = x |> map f
         /// apply
-        let (<*>) f x : OTM<_, 'r, 'err> = x |> apply f
+        let inline (<*>) f x : OTM<_, 'r, 'err> = x |> apply f
 
 [<AutoOpen>]
 module OTMComputationExpression =
