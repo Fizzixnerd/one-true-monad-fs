@@ -11,6 +11,22 @@ module Async =
     let bind f x = async.Bind(x, f)
     let map f x = x |> bind (f >> retn)
 
+module Result =
+    let traverse f (xs: Result<_, _> list) =
+        let (<!>) = Result.map
+        let (<*>) f x =
+            match f, x with
+            | Ok f', Ok x' -> Ok (f' x')
+            | Error e, Ok _ -> Error e
+            | Ok _, Error e -> Error e
+            | Error e, Error _ -> Error e
+        let cons y ys = y :: ys
+        let consM y ys = cons <!> f y <*> ys
+        let x0 = Ok []
+        List.foldBack consM xs x0
+
+    let sequence xs = traverse id xs
+
 /// An `error` along with a `StackTrace`
 type Traced<'err> =
     { error: 'err
@@ -19,6 +35,13 @@ type Traced<'err> =
 [<RequireQualifiedAccess>]
 module Traced =
 
+    let withSourceInfo =
+        #if DEBUG
+        true
+        #else
+        false
+        #endif
+
     /// `map` over the `'err`
     let map (f: 'err1 -> 'err2) (x: Traced<'err1>) =
         { error = f x.error
@@ -26,13 +49,6 @@ module Traced =
 
     /// Create a `StackTrace` for the given `err`
     let trace err =
-        let withSourceInfo =
-            #if DEBUG
-            true
-            #else
-            false
-            #endif
-
         { error = err
           trace = StackTrace(withSourceInfo) }
 
@@ -161,7 +177,7 @@ module OTM =
                  | Choice2Of2 e ->
                      Error
                          { error = f e
-                           trace = StackTrace(e) })
+                           trace = StackTrace(e, Traced.withSourceInfo) })
 
     // various lifting functions
 
@@ -219,6 +235,13 @@ module OTM =
 
     /// `Async.Sleep : int -> Async<unit>` lifted into an `OTM`
     let sleep (ms: int) : OTM<_, 'r, 'err> = Async.Sleep ms |> ofAsync
+
+    let parallel' (xs: seq<OTM<_, 'r, 'err>>) : OTM<_ array, 'r, 'err> =
+        fun r ->
+            xs
+            |> Seq.map (fun x -> x r)
+            |> Async.Parallel
+            |> Async.map (List.ofArray >> Result.sequence >> Result.map Array.ofList)
 
     /// Handle an error in the same manner of a `try ... with` block:
     ///
