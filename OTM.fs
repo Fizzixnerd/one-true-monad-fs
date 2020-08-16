@@ -3,9 +3,10 @@
 // Partially stolen from https://github.com/swlaschin/DomainModelingMadeFunctional/blob/master/src/OrderTaking/Result.fs from AsyncResult
 
 open System.Diagnostics
-open Serilog
 
+[<RequireQualifiedAccess>]
 module Async =
+
     let retn x = async.Return(x)
     let bind f x = async.Bind(x, f)
     let map f x = x |> bind (f >> retn)
@@ -15,7 +16,9 @@ type Traced<'err> =
     { error: 'err
       trace: StackTrace }
 
+[<RequireQualifiedAccess>]
 module Traced =
+
     /// `map` over the `'err`
     let map (f: 'err1 -> 'err2) (x: Traced<'err1>) =
         { error = f x.error
@@ -24,17 +27,20 @@ module Traced =
     /// Create a `StackTrace` for the given `err`
     let trace err =
         let withSourceInfo =
-#if DEBUG
+            #if DEBUG
             true
-#else
+            #else
             false
-#endif
+            #endif
+
         { error = err
           trace = StackTrace(withSourceInfo) }
 
 type Reader<'a, 'r> = 'r -> 'a
 
+[<RequireQualifiedAccess>]
 module Reader =
+
     let map f (x: Reader<_, _>) : Reader<_, _> = x >> f
     let withReader f (x: Reader<_, _>) : Reader<_, _> = f >> x
 
@@ -42,6 +48,7 @@ module Reader =
     let join (x: Reader<Reader<_, _>, _>) : Reader<_, _> =
         fun r -> (x r) r
     let bind (f: _ -> Reader<_, _>) (x: Reader<_, _>) : Reader<_, _> = x |> map f |> join
+
     let ask: Reader<_, _> = id
     let asks (f: 'r -> 'b) : Reader<_, _> = f
     let local (f: 'r -> 'r) x = withReader f x
@@ -74,6 +81,9 @@ module OTM =
     /// Reader `run` lifted to `OTM`
     let run r (x: OTM<_, _, _>) = x r
 
+    /// Reader `run >> Async.RunSynchronously` lifted to `OTM`
+    let runSynchronously r x = x r |> Async.RunSynchronously
+
     /// Reader `ask` lifted to `OTM`
     let ask : OTM<'r, 'r, 'err> = fun x -> x |> Result.Ok |> Async.retn
 
@@ -97,15 +107,6 @@ module OTM =
                 match! x r with
                 | Ok x -> return! (f x) r
                 | Error e -> return Error e
-            }
-
-    /// `bind`, but for the `'err` component; see also `OTM.handle`
-    let bindError (f: 'err1 -> OTM<'a, 'r, 'err2>) (x: OTM<'a, 'r, 'err1>) : OTM<'a, 'r, 'err2> =
-        fun r ->
-            async {
-                match! x r with
-                | Ok x' -> return Ok x'
-                | Error tracedError -> return! (f tracedError.error) r
             }
 
     /// Applicative `apply`
@@ -156,9 +157,6 @@ module OTM =
 
     // various lifting functions
 
-    /// Alias for `OTM.retn`
-    let ofSuccess x : OTM<_, 'r, 'err> = retn x
-
     /// Lift an `'err` into an `OTM`, creating a `StackTrace` for it at the call site
     /// of this function
     let throw x : OTM<_, 'r, 'err> = x |> Traced.trace |> Result.Error |> Async.retn |> Reader.retn
@@ -174,8 +172,26 @@ module OTM =
         fun r ->
             r |> retn (x r)
 
-    /// Obtain an OTM containing the Result portion of the computation. Useful
-    /// for `match!`-ing inside an `otm` block:
+    /// Lift a `Result<'a, 'err>` into an `OTM`, creating a stack trace if it is
+    /// a `Result.Error`
+    let ofResult (x: Result<_, 'err>) : OTM<_, 'r, 'err> =
+        fun _ -> x |> Result.mapError Traced.trace |> Async.retn
+
+    let asResult (x: OTM<_, 'r, 'err>) : OTM<Result<'a, 'err>, 'r, 'err> =
+        fun r ->
+            async {
+                let! res = x r
+                return! (retn (res |> Result.mapError (fun x -> x.error))) r
+            }
+
+    /// Lift a `Result<'a, Traced<'err>` into an `OTM`, leaving the `StackTrace`
+    /// as-is
+    let ofTracedResult (x: Result<_, Traced<'err>>) : OTM<_, 'r, 'err> =
+        fun _ -> x |> Async.retn
+
+    /// Obtain an `OTM` containing the `Result` portion of the computation,
+    /// including the `Traced` portion of the `'err`. Useful for `match!`-ing
+    /// inside an `otm` block:
     ///
     /// ```
     /// otm {
@@ -184,7 +200,7 @@ module OTM =
     ///     | Error e -> return! g e
     /// }
     /// ```
-    let asResult (x: OTM<_, 'r, 'err>) : OTM<Result<'a, Traced<'err>>, 'r, 'err> =
+    let asTracedResult (x: OTM<_, 'r, 'err>) : OTM<Result<'a, Traced<'err>>, 'r, 'err> =
         fun r ->
             async {
                 let! res = x r
@@ -194,7 +210,7 @@ module OTM =
     /// `Async.Sleep : int -> Async<unit>` lifted into an `OTM`
     let sleep (ms: int) : OTM<_, 'r, 'err> = Async.Sleep ms |> ofAsync
 
-    /// Alias for `OTM.bindError`; handle an error in the same manner of a `try ...
+    /// Handle an error in the same manner of a `try ...
     /// with` block:
     ///
     /// ```
@@ -216,7 +232,13 @@ module OTM =
     ///      | ErrorType2 _ as e2 -> g e2
     ///      | e -> h e)
     /// ```
-    let handle f (x: OTM<_, 'r, 'err1>) : OTM<_, 'r, 'err2> = bindError f x
+    let handle f (x: OTM<_, 'r, 'err1>) : OTM<_, 'r, 'err2> =
+        fun r ->
+            async {
+                match! x r with
+                | Ok x' -> return Ok x'
+                | Error tracedError -> return! (f tracedError.error) r
+            }
 
     /// Like `OTM.handle`, but with access to the `StackTrace` of the `'err`
     let handleTraced (f: Traced<'err1> -> OTM<_, _, _>) (x: OTM<_, 'r, 'err1>) : OTM<_, 'r, 'err2> =
@@ -228,6 +250,7 @@ module OTM =
             }
 
     module Operators =
+
         /// bind
         let (>>=) x f : OTM<_, 'r, 'err> = x |> bind f
         /// flip bind
@@ -293,6 +316,9 @@ module OTMComputationExpression =
     let otm = OTMBuilder()
 
 module Example =
+
+    open Serilog
+
     type Error = | TooLowBadness of int
 
     type Config =
@@ -318,7 +344,7 @@ module Example =
             return! ofInt x'
         }
 
-    let zero = 0 |> OTM.ofSuccess
+    let zero = 0 |> ofInt
 
     let three = zero |> incr |> incr |> incr
 
@@ -335,13 +361,13 @@ module Example =
 
     let logSuccess (x: OTM<int, ReaderState, 'err>): OTM<_, _, _> =
         otm {
-            let! x' = x
             let! logger = OTM.asks ReaderState.logger_
+            let! x' = x
             logger.Information("Success! The value is: {Value}", x')
             return x'
         }
 
-    let main state =
+    let main =
         otm {
             let! x = three
             let! y = negativeOne
@@ -349,11 +375,11 @@ module Example =
         }
         |> logError
         |> logSuccess
-        |> OTM.run state
-        |> Async.RunSynchronously
 
 module Main =
+
     open Example
+    open Serilog
     open Microsoft.Extensions.Configuration
     open Microsoft.Extensions.Configuration.Json
 
@@ -372,5 +398,7 @@ module Main =
             { logger = logger
               config = config }
 
-        do Example.main state |> ignore
+        Example.main
+        |> OTM.runSynchronously state
+        |> ignore
         0
