@@ -5,8 +5,9 @@
     <TargetFramework>netcoreapp3.1</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="OTM.fs" />
     <None Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Include="OTM.fs" />
+    <Compile Include="Example.fs" />
   </ItemGroup>
   <Import Project=".paket\Paket.Restore.targets" />
 </Project>

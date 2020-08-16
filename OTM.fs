@@ -63,18 +63,17 @@ type Reader<'a, 'r> = ('r -> 'a)
 module Reader =
 
     let inline run r (x: Reader<'a, 'r>) = x r
-    let inline ofFunction f : Reader<'a, 'r> = f
 
-    let inline map f x : Reader<_, _> = ofFunction (x >> f)
-    let inline withReader f x : Reader<_, _> = ofFunction (f >> x)
+    let inline map f x : Reader<_, 'r> = x >> f
+    let inline withReader f x : Reader<_, _> = f >> x
 
-    let inline retn x : Reader<_, _> = ofFunction (fun _ -> x)
+    let inline retn x : Reader<_, _> = fun _ -> x
     let inline join (x: Reader<Reader<_, 'r>, 'r>) : Reader<'a, 'r> =
-        ofFunction (fun r -> run r (run r x))
+        fun r -> run r (run r x)
     let inline bind (f: _ -> Reader<_, 'r>) (x: Reader<_, _>) : Reader<_, _> = x |> map f |> join
 
     let inline ask x = x
-    let inline asks (f: 'r -> 'b) : Reader<_, _> = ofFunction f
+    let inline asks (f: 'r -> 'b) : Reader<_, _> = f
     let inline local (f: 'r -> 'r) x = withReader f x
 
 
@@ -362,90 +361,3 @@ module OTMComputationExpression =
     /// Builds a OTM using computation expression syntax
     let otm = OTMBuilder()
 
-module Example =
-
-    open Serilog
-
-    type Error = | TooLowBadness of int
-
-    type Config =
-        { lowest: int }
-        static member lowest_ config = config.lowest
-
-    type ReaderState =
-        { logger: ILogger
-          config: Config }
-        static member logger_ r = r.logger
-        static member config_ r = r.config
-
-    let ofInt x = otm {
-        let! lowest = OTM.asks (ReaderState.config_ >> Config.lowest_)
-        return! if x < lowest then OTM.throw (TooLowBadness lowest) else OTM.retn x
-    }
-
-    let incr x = x |> OTM.map (fun y -> y + 1)
-
-    let decr x =
-        otm {
-            let! x' = x |> OTM.map (fun y -> y - 1)
-            return! ofInt x'
-        }
-
-    let zero = 0 |> ofInt
-
-    let three = zero |> incr |> incr |> incr
-
-    let negativeOne = zero |> decr
-
-    let logError (x: OTM<_, ReaderState, 'err>) =
-        otm {
-            let! logger = OTM.asks ReaderState.logger_
-            return!
-                x |> OTM.handleTraced (fun e ->
-                    logger.Error("An error has occurred: {Error}\n    with StackTrace:\n{StackTrace}", e.error, e.trace)
-                    OTM.rethrow e)
-        }
-
-    let logSuccess (x: OTM<int, ReaderState, 'err>): OTM<_, _, _> =
-        otm {
-            let! logger = OTM.asks ReaderState.logger_
-            let! x' = x
-            logger.Information("Success! The value is: {Value}", x')
-            return x'
-        }
-
-    let main =
-        otm {
-            let! x = three
-            let! y = negativeOne
-            return x + y
-        }
-        |> logError
-        |> logSuccess
-
-module Main =
-
-    open Example
-    open Serilog
-    open Microsoft.Extensions.Configuration
-    open Microsoft.Extensions.Configuration.Json
-
-    [<EntryPoint>]
-    let main _ =
-        let configRoot =
-            ConfigurationBuilder()
-                .AddJsonFile("appsettings.json")
-                .Build()
-
-        let config = { lowest = configRoot.["Lowest"] |> int }
-
-        let logger = LoggerConfiguration().WriteTo.Console().CreateLogger()
-
-        let state =
-            { logger = logger
-              config = config }
-
-        Example.main
-        |> OTM.runSynchronously state
-        |> ignore
-        0
