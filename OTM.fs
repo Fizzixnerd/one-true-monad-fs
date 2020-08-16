@@ -185,6 +185,8 @@ module OTM =
     let ofResult (x: Result<_, 'err>) : OTM<_, 'r, 'err> =
         fun _ -> x |> Result.mapError Traced.trace |> Async.retn
 
+    /// Obtain an `OTM` containing the `Result` portion of the computation, sans
+    /// the `'err`'s `StackTrace`
     let asResult (x: OTM<_, 'r, 'err>) : OTM<Result<'a, 'err>, 'r, 'err> =
         fun r ->
             async {
@@ -218,8 +220,7 @@ module OTM =
     /// `Async.Sleep : int -> Async<unit>` lifted into an `OTM`
     let sleep (ms: int) : OTM<_, 'r, 'err> = Async.Sleep ms |> ofAsync
 
-    /// Handle an error in the same manner of a `try ...
-    /// with` block:
+    /// Handle an error in the same manner of a `try ... with` block:
     ///
     /// ```
     /// try
