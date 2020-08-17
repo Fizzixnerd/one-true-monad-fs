@@ -227,6 +227,21 @@ module OTM =
                 return! run r (retn (res |> Result.mapError (fun x -> x.error)))
             }
 
+    /// Lift an untraced `Async<Result<'a, 'err>>` into an OTM, forming a
+    /// StackTrace at the callsite of this function if in the Error case.
+    let ofAsyncResult (x: Async<Result<_, 'err>>) : OTM<_, 'r, 'err> =
+        fun _ -> x |> Async.map (Result.mapError Traced.trace)
+
+    /// Obtain an `OTM` containing the `Async Result` portion of the
+    /// computation, without the StackTrace.
+    let asAsyncResult (x : OTM<_, 'r, 'err>) =
+        fun r ->
+            x
+            |> run r
+            |> Async.map (Result.mapError (fun te -> te.error))
+            |> retn
+            |> run r
+
     /// Lift a `Result<'a, Traced<'err>` into an `OTM`, leaving the `StackTrace`
     /// as-is
     let ofTracedResult (x: Result<_, Traced<'err>>) : OTM<_, 'r, 'err> =
@@ -326,32 +341,31 @@ module OTMComputationExpression =
                 this.While(guard, body))
 
         member this.TryWith(body, handler) =
-            async {
-                try return! this.ReturnFrom(body())
-                with e -> return! handler e
-            }
+            fun r ->
+                async {
+                    try return! this.ReturnFrom(body()) |> OTM.run r
+                    with e -> return! handler e |> OTM.run r
+                }
 
-        member this.TryFinally(body, compensation) =
-            async {
-                try return! this.ReturnFrom(body())
-                finally compensation()
-            }
+        member this.TryFinally(body, compensation) : OTM<_, 'r, 'err> =
+            fun r ->
+                async {
+                    try return! this.ReturnFrom(body()) |> OTM.run r
+                    finally compensation()
+                }
 
         member this.Using(disposable: #System.IDisposable, body) =
             let body' = fun () -> body disposable
             this.TryFinally(body', fun () ->
                 match disposable with
-                    | null -> ()
-                    | disp -> disp.Dispose())
+                | null -> ()
+                | disp -> disp.Dispose())
 
         // TODO: Is this even correct?
         member this.For(sequence:seq<_>, body: 'e -> OTM<_, 'r, 'err>) =
                 this.Using(sequence.GetEnumerator(),fun enum ->
-                    async {
-                        return
-                            this.While(enum.MoveNext,
-                                this.Delay(fun () -> body enum.Current))
-                    })
+                    this.While(enum.MoveNext,
+                        this.Delay(fun () -> body enum.Current)))
 
         member this.Combine (a,b) =
             this.Bind(a, fun () -> b())
