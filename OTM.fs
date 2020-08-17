@@ -333,7 +333,7 @@ module OTMComputationExpression =
     type OTMBuilder() =
         member __.Return(x) = OTM.retn x
         member __.Bind(x, f) = x |> OTM.bind f
-        member __.ReturnFrom(x) = x
+        member __.ReturnFrom(x: OTM<_, 'r, 'err>) = x
 
         member this.Zero() = this.Return ()
 
