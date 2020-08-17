@@ -39,6 +39,8 @@ type Traced<'err> =
 [<RequireQualifiedAccess>]
 module Traced =
 
+    /// A smart variable that uses the current build settings to determine if
+    /// StackTraces should be made with full source information
     let withSourceInfo =
         #if DEBUG
         true
@@ -55,8 +57,12 @@ module Traced =
     /// `Traced<'err>`
     let trace err : Traced<'err> =
         { error = err
-          trace = StackTrace(withSourceInfo) }
+          trace = StackTrace(1, withSourceInfo) }
 
+    /// Obtain the `'err` component of a Traced<'err>
+    let untrace err : 'err = err.error
+
+/// The Reader monad
 type Reader<'a, 'r> = ('r -> 'a)
 
 [<RequireQualifiedAccess>]
