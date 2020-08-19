@@ -6,7 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <None Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
-    <Compile Include="Result.fs" />
     <Compile Include="OTM.fs" />
     <Compile Include="Example.fs" />
   </ItemGroup>

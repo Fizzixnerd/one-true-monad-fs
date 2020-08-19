@@ -83,17 +83,13 @@ module Main =
             { logger = logger
               config = config }
 
+        // Shouldn't print anything
         otm {
-            return!
-                async { printfn "Rawr" }
-                |> OTM.ofAsync
+            printf "Rawr"
         }
         |> ignore
 
-        asyncResult {
-            printfn "Meow"
-        }
-
+        // Shouldn't print anything
         async {
             printfn "Moo"
         }
