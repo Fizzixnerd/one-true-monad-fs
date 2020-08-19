@@ -174,9 +174,9 @@ module OTM =
         let (<*>) = apply
         let (<!>) = map
         let cons head tail = head :: tail
-        let consM tailM head = cons <!> f head <*> tailM
+        let consM head tailM = cons <!> f head <*> tailM
         let x0 = retn []
-        List.fold consM x0 xs
+        List.foldBack consM xs x0
 
     /// Applicative `sequence`, specialized to lists
     let sequence xs : OTM<_, 'r, 'err> = traverse id xs
