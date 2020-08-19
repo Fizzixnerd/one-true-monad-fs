@@ -133,11 +133,10 @@ module OTM =
     /// Monadic `bind`
     let inline bind (f: 'a -> OTM<'b, 'r, 'err>) (x: OTM<'a, 'r, 'err>) : OTM<'b, 'r, 'err> =
         fun r ->
-            async {
-                match! run r x with
-                | Ok x -> return! run r (f x)
-                | Error e -> return Error e
-            }
+            run r x
+            |> Async.bind (function
+                | Ok a -> run r (f a)
+                | Error e -> Async.retn <| Error e)
 
     /// Monadic `join`
     let inline join (x: OTM<_, 'r, 'err>) = x |> bind id
@@ -319,9 +318,9 @@ module OTM =
         /// flip bind
         let inline (=<<) f x : OTM<_, 'r, 'err> = x |> bind f
         /// Kliesli composition
-        let inline (>=>) f g : _ -> OTM<_, 'r, 'err> = fun x -> x >>= f >>= g
+        let inline (>=>) f g : _ -> OTM<_, 'r, 'err> = fun x -> f x >>= g
         /// flip Kliesli
-        let inline (<=<) g f : _ -> OTM<_, 'r, 'err> = fun x -> x >>= f >>= g
+        let inline (<=<) g f : _ -> OTM<_, 'r, 'err> = fun x -> f x >>= g
         /// map
         let inline (<!>) f x : OTM<_, 'r, 'err> = x |> map f
         /// apply
@@ -337,8 +336,7 @@ module OTMComputationExpression =
 
         member this.Zero() = this.Return ()
 
-        member __.Delay(f) = f
-        member __.Run(f) = f ()
+        member __.Delay(f) = fun r -> OTM.run r (f ())
 
         member this.While(guard, body) =
             if not (guard())
@@ -367,15 +365,14 @@ module OTMComputationExpression =
                 | null -> ()
                 | disp -> disp.Dispose())
 
-        // TODO: Is this even correct?
-        member this.For(sequence:seq<_>, body: 'e -> OTM<_, 'r, 'err>) =
-                this.Using(sequence.GetEnumerator(),fun enum ->
-                    this.While(enum.MoveNext,
-                        this.Delay(fun () -> body enum.Current)))
+        // // TODO: Is this even correct?
+        // member this.For(sequence:seq<_>, body: 'e -> OTM<_, 'r, 'err>) =
+        //         this.Using(sequence.GetEnumerator(),fun enum ->
+        //             this.While(enum.MoveNext,
+        //                 this.Delay(fun () -> body enum.Current)))
 
         member this.Combine (a,b) =
-            this.Bind(a, fun () -> b())
+            this.Bind(a, fun () -> b)
 
     /// Builds a OTM using computation expression syntax
     let otm = OTMBuilder()
-
