@@ -3,6 +3,7 @@
 // Partially stolen from https://github.com/swlaschin/DomainModelingMadeFunctional/blob/master/src/OrderTaking/Result.fs from AsyncResult
 
 open System.Diagnostics
+open System.Runtime.CompilerServices
 
 [<RequireQualifiedAccess>]
 module Async =
@@ -31,10 +32,18 @@ module Result =
     /// a `List`
     let sequenceAtoL xs = traverseAtoL id xs
 
+type Frame = string
+type SymbolicStackTrace = SymbolicStackTrace of Frame list
+
+module SymbolicStackTrace =
+    let cons frame (SymbolicStackTrace sst) = SymbolicStackTrace (frame :: sst)
+    let rev (SymbolicStackTrace sst) = SymbolicStackTrace (List.rev sst)
+
 /// An `error` along with a `StackTrace`
 type Traced<'err> =
     { error: 'err
-      trace: StackTrace }
+      trace: StackTrace
+      strace: SymbolicStackTrace }
 
 [<RequireQualifiedAccess>]
 module Traced =
@@ -51,16 +60,22 @@ module Traced =
     /// `map` over the `'err`
     let map (f: 'err1 -> 'err2) (x: Traced<'err1>) =
         { error = f x.error
-          trace = x.trace }
+          trace = x.trace
+          strace = SymbolicStackTrace []}
 
     /// Create a `StackTrace` for the given `err` and return it in a
     /// `Traced<'err>`
     let trace err : Traced<'err> =
         { error = err
-          trace = StackTrace(1, withSourceInfo) }
+          trace = StackTrace(1, withSourceInfo)
+          strace = SymbolicStackTrace []}
 
     /// Obtain the `'err` component of a Traced<'err>
     let untrace err : 'err = err.error
+
+    let addFrame (f: Frame) (t: Traced<'a>) =
+        { t with
+             strace = SymbolicStackTrace.cons f t.strace }
 
 /// The Reader monad
 type Reader<'a, 'r> = ('r -> 'a)
@@ -131,7 +146,7 @@ module OTM =
     let local f (x: OTM<_, 'r, 'err>) : OTM<_, 'r, 'err> = Reader.local f x
 
     /// Monadic `return`
-    let inline retn (x: 'a) : OTM<'a, 'r, 'err> = 
+    let inline retn (x: 'a) : OTM<'a, 'r, 'err> =
         async {
             return x |> Result.Ok
         }
@@ -207,7 +222,8 @@ module OTM =
                  | Choice2Of2 e ->
                      Error
                          { error = f e
-                           trace = StackTrace(e, Traced.withSourceInfo) })
+                           trace = StackTrace(e, Traced.withSourceInfo)
+                           strace = SymbolicStackTrace [] })
 
     // various lifting functions
 
@@ -301,7 +317,7 @@ module OTM =
     ///      | ErrorType2 _ as e2 -> g e2
     ///      | e -> h e)
     /// ```
-    let handle f (x: OTM<_, 'r, 'err1>) : OTM<_, 'r, 'err2> =
+    let bindError f (x: OTM<_, 'r, 'err1>) : OTM<_, 'r, 'err2> =
         fun r ->
             async {
                 match! run r x with
@@ -309,13 +325,21 @@ module OTM =
                 | Error tracedError -> return! run r (f tracedError.error)
             }
 
-    /// Like `OTM.handle`, but with access to the `StackTrace` of the `'err`
-    let handleTraced (f: Traced<'err1> -> OTM<_, _, _>) (x: OTM<_, 'r, 'err1>) : OTM<_, 'r, 'err2> =
+    /// Like `OTM.bindError`, but with access to the `StackTrace` of the `'err`
+    let bindTracedError (f: Traced<'err1> -> OTM<_, _, _>) (x: OTM<_, 'r, 'err1>) : OTM<_, 'r, 'err2> =
         fun r ->
             async {
                 match! run r x with
                 | Ok x' -> return Ok x'
                 | Error tracedError -> return! run r (f tracedError)
+            }
+
+    let addFrame (f: Frame) (x: OTM<_, 'r, 'err>) : OTM<_, 'r, 'err> =
+        fun r ->
+            async {
+                match! run r x with
+                | Ok x -> return Ok x
+                | Error e -> return Error <| Traced.addFrame f e
             }
 
     module Operators =
@@ -333,13 +357,31 @@ module OTM =
         /// apply
         let inline (<*>) f x : OTM<_, 'r, 'err> = x |> apply f
 
+module Utils =
+    let orUnknown x = x |> Option.defaultValue "<unknown>"
+
 [<AutoOpen>]
 module OTMComputationExpression =
 
     type OTMBuilder() =
         member inline __.Return(x) = OTM.retn x
-        member inline __.Bind(x, f) = x |> OTM.bind f
-        member inline __.ReturnFrom(x: OTM<_, 'r, 'err>) = x
+        member inline __.Bind
+            (x: OTM<_, 'r, 'err>,
+             f: _ -> OTM<_, 'r, 'err>,
+             [<CallerMemberName>]?callerName: string,
+             [<CallerFilePath>]?callerFilePath: string,
+             [<CallerLineNumber>]?callerLineNumber: int) =
+            x
+            |> OTM.bind f
+            |> OTM.addFrame (sprintf "%s in %s at %s" (callerName |> Utils.orUnknown) (callerFilePath |> Utils.orUnknown) (callerLineNumber |> Option.map string |> Utils.orUnknown))
+
+        member inline __.ReturnFrom
+            (x: OTM<_, 'r, 'err>,
+             [<CallerMemberName>]?callerName: string,
+             [<CallerFilePath>]?callerFilePath: string,
+             [<CallerLineNumber>]?callerLineNumber: int) =
+            x
+            |> OTM.addFrame (sprintf "%s in %s at %s" (callerName |> Utils.orUnknown) (callerFilePath |> Utils.orUnknown) (callerLineNumber |> Option.map string |> Utils.orUnknown))
 
         member this.Zero() = this.Return ()
 

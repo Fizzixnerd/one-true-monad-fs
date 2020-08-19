@@ -39,8 +39,8 @@ module Example =
         otm {
             let! logger = OTM.asks ReaderState.logger_
             return!
-                x |> OTM.handleTraced (fun e ->
-                    logger.Error("An error has occurred: {Error}\n    with StackTrace:\n{StackTrace}", e.error, e.trace)
+                x |> OTM.bindTracedError (fun e ->
+                    logger.Error("An error has occurred: {Error}\n    with StackTrace:\n{StackTrace}\n    with SymbolicStackTrace:\n{SymbolicStackTrace}", e.error, e.trace, e.strace |> SymbolicStackTrace.rev)
                     OTM.rethrow e)
         }
 
