@@ -83,6 +83,22 @@ module Main =
             { logger = logger
               config = config }
 
+        otm {
+            return!
+                async { printfn "Rawr" }
+                |> OTM.ofAsync
+        }
+        |> ignore
+
+        asyncResult {
+            printfn "Meow"
+        }
+
+        async {
+            printfn "Moo"
+        }
+        |> ignore
+
         Example.main
         |> OTM.runSynchronously state
         |> ignore

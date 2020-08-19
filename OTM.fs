@@ -114,6 +114,9 @@ module OTM =
     /// Reader `run >> Async.RunSynchronously` lifted to `OTM`
     let runSynchronously r x = run r x |> Async.RunSynchronously
 
+    /// `Reader.map` for `OTM`s
+    let inline readerMap f (x: OTM<_, 'r, 'err>) = Reader.map f x
+
     /// Reader `ask` lifted to `OTM`
     let ask: OTM<'r, 'r, 'err> = fun x -> x |> Result.Ok |> Async.retn
 
@@ -128,7 +131,11 @@ module OTM =
     let local f (x: OTM<_, 'r, 'err>) : OTM<_, 'r, 'err> = Reader.local f x
 
     /// Monadic `return`
-    let inline retn (x: 'a) : OTM<'a, 'r, 'err> = x |> Result.Ok |> Async.retn |> Reader.retn
+    let inline retn (x: 'a) : OTM<'a, 'r, 'err> = 
+        async {
+            return x |> Result.Ok
+        }
+        |> Reader.retn
 
     /// Monadic `bind`
     let inline bind (f: 'a -> OTM<'b, 'r, 'err>) (x: OTM<'a, 'r, 'err>) : OTM<'b, 'r, 'err> =
@@ -163,13 +170,13 @@ module OTM =
         f <!> x <*> y <*> z <*> w
 
     /// Applicative `traverse`, specialized to lists
-    let traverse f xs =
+    let traverse (f: 'a -> OTM<'b, 'r, 'err>) xs =
         let (<*>) = apply
         let (<!>) = map
         let cons head tail = head :: tail
-        let consM head tailM = cons <!> f head <*> tailM
+        let consM tailM head = cons <!> f head <*> tailM
         let x0 = retn []
-        List.foldBack consM xs x0
+        List.fold consM x0 xs
 
     /// Applicative `sequence`, specialized to lists
     let sequence xs : OTM<_, 'r, 'err> = traverse id xs
@@ -182,7 +189,7 @@ module OTM =
     let parallel' (xs: OTM<_, 'r, 'err> array) : OTM<_ list, 'r, 'err> =
         fun r ->
             xs
-            |> Array.Parallel.map (fun x -> run r x)
+            |> Array.Parallel.map (run r)
             |> Async.Parallel
             |> Async.map Result.sequenceAtoL
 
@@ -330,9 +337,9 @@ module OTM =
 module OTMComputationExpression =
 
     type OTMBuilder() =
-        member __.Return(x) = OTM.retn x
-        member __.Bind(x, f) = x |> OTM.bind f
-        member __.ReturnFrom(x: OTM<_, 'r, 'err>) = x
+        member inline __.Return(x) = OTM.retn x
+        member inline __.Bind(x, f) = x |> OTM.bind f
+        member inline __.ReturnFrom(x: OTM<_, 'r, 'err>) = x
 
         member this.Zero() = this.Return ()
 
@@ -365,13 +372,12 @@ module OTMComputationExpression =
                 | null -> ()
                 | disp -> disp.Dispose())
 
-        // // TODO: Is this even correct?
-        // member this.For(sequence:seq<_>, body: 'e -> OTM<_, 'r, 'err>) =
-        //         this.Using(sequence.GetEnumerator(),fun enum ->
-        //             this.While(enum.MoveNext,
-        //                 this.Delay(fun () -> body enum.Current)))
+        member this.For(sequence:seq<_>, body: 'e -> OTM<_, 'r, 'err>) =
+            this.Using(sequence.GetEnumerator(),fun enum ->
+                this.While(enum.MoveNext,
+                    fun () -> this.Delay(fun () -> body enum.Current)))
 
-        member this.Combine (a,b) =
+        member this.Combine(a,b) =
             this.Bind(a, fun () -> b)
 
     /// Builds a OTM using computation expression syntax
