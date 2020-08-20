@@ -6,7 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <None Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
-    <Compile Include="OTM.fs" />
+    <Compile Include="Otm.fs" />
     <Compile Include="Example.fs" />
   </ItemGroup>
   <Import Project=".paket\Paket.Restore.targets" />
