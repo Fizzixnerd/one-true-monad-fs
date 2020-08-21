@@ -1,4 +1,4 @@
-open OTM
+open Otm
 
 module Example =
 
@@ -16,16 +16,16 @@ module Example =
         static member logger_ r = r.logger
         static member config_ r = r.config
 
-    let ofInt x = otm {
-        let! lowest = OTM.asks (ReaderState.config_ >> Config.lowest_)
-        return! if x < lowest then OTM.throw (TooLowBadness lowest) else OTM.retn x
-    }
+    let ofInt x =
+        Otm.asks (ReaderState.config_ >> Config.lowest_)
+        |> Otm.bind (fun lowest ->
+            if x < lowest then Otm.throw (TooLowBadness lowest) else Otm.retn x)
 
-    let incr x = x |> OTM.map (fun y -> y + 1)
+    let incr x = x |> Otm.map (fun y -> y + 1)
 
     let decr x =
         otm {
-            let! x' = x |> OTM.map (fun y -> y - 1)
+            let! x' = x |> Otm.map (fun y -> y - 1)
             return! ofInt x'
         }
 
@@ -35,18 +35,18 @@ module Example =
 
     let negativeOne = zero |> decr
 
-    let logError (x: OTM<_, ReaderState, 'err>) =
+    let logError (x: Otm<_, ReaderState, 'err>) =
         otm {
-            let! logger = OTM.asks ReaderState.logger_
+            let! logger = Otm.asks ReaderState.logger_
             return!
-                x |> OTM.bindTracedError (fun e ->
-                    logger.Error("An error has occurred: {Error}\n    with StackTrace:\n{StackTrace}\n    with SymbolicStackTrace:\n{SymbolicStackTrace}", e.error, e.trace, e.strace |> SymbolicStackTrace.rev)
-                    OTM.rethrow e)
+                x |> Otm.bindTracedError (fun e ->
+                    logger.Error("An error has occurred: {Error} with {SymbolicStackTrace}", e.error, e.strace)
+                    Otm.rethrow e)
         }
 
-    let logSuccess (x: OTM<int, ReaderState, 'err>): OTM<_, _, _> =
+    let logSuccess (x: Otm<int, ReaderState, 'err>): Otm<_, _, _> =
         otm {
-            let! logger = OTM.asks ReaderState.logger_
+            let! logger = Otm.asks ReaderState.logger_
             let! x' = x
             logger.Information("Success! The value is: {Value}", x')
             return x'
@@ -96,6 +96,6 @@ module Main =
         |> ignore
 
         Example.main
-        |> OTM.runSynchronously state
+        |> Otm.runSynchronously state
         |> ignore
         0

@@ -59,14 +59,14 @@ module Traced =
     let map (f: 'err1 -> 'err2) (x: Traced<'err1>) =
         { error = f x.error
           trace = x.trace
-          strace = SymbolicStackTrace []}
+          strace = x.strace }
 
     /// Create a `StackTrace` for the given `err` and return it in a
     /// `Traced<'err>`
     let trace err : Traced<'err> =
         { error = err
           trace = StackTrace(1, withSourceInfo)
-          strace = SymbolicStackTrace []}
+          strace = SymbolicStackTrace [] }
 
     /// Obtain the `'err` component of a Traced<'err>
     let untrace err : 'err = err.error
@@ -123,6 +123,16 @@ module Otm =
 
     /// Reader `run` lifted to `Otm`
     let inline run r (x: Otm<_, _, _>) = Reader.run r x
+
+    let addFrame (f: Frame) (x: Otm<_, 'r, 'err>) : Otm<_, 'r, 'err> =
+        fun r ->
+            async {
+                match! run r x with
+                | Ok x -> return Ok x
+                | Error e -> return Error <| Traced.addFrame f e
+            }
+
+    /// Functor `map`
 
     /// Reader `run >> Async.RunSynchronously` lifted to `Otm`
     let runSynchronously r x = run r x |> Async.RunSynchronously
@@ -253,7 +263,7 @@ module Otm =
                 return! run r (retn (res |> Result.mapError (fun x -> x.error)))
             }
 
-    /// Lift an untraced `Async<Result<'a, 'err>>` into an Otm, forming a
+    /// Lift an untraced `Async<Result<'a, 'err>>` into an `Otm`, forming a
     /// StackTrace at the callsite of this function if in the Error case.
     let ofAsyncResult (x: Async<Result<_, 'err>>) : Otm<_, 'r, 'err> =
         fun _ -> x |> Async.map (Result.mapError Traced.trace)
@@ -332,14 +342,6 @@ module Otm =
                 | Error tracedError -> return! run r (f tracedError)
             }
 
-    let addFrame (f: Frame) (x: Otm<_, 'r, 'err>) : Otm<_, 'r, 'err> =
-        fun r ->
-            async {
-                match! run r x with
-                | Ok x -> return Ok x
-                | Error e -> return Error <| Traced.addFrame f e
-            }
-
     module Operators =
 
         /// bind
@@ -356,13 +358,21 @@ module Otm =
         let inline (<*>) f x : Otm<_, 'r, 'err> = x |> apply f
 
 module Utils =
-    let orUnknown x = x |> Option.defaultValue "<unknown>"
+    let inline orUnknown x = x |> Option.defaultValue "<unknown>"
 
 [<AutoOpen>]
 module OtmComputationExpression =
 
     type OtmBuilder() =
-        member inline __.Return(x) = Otm.retn x
+        member inline __.Return
+            (x,
+            [<CallerMemberName>]?callerName: string,
+            [<CallerFilePath>]?callerFilePath: string,
+            [<CallerLineNumber>]?callerLineNumber: int) =
+            x
+            |> Otm.retn
+            // |> Otm.addFrame (sprintf "%s in %s at %s" (callerName |> Utils.orUnknown) (callerFilePath |> Utils.orUnknown) (callerLineNumber |> Option.map string |> Utils.orUnknown))
+
         member inline __.Bind
             (x: Otm<_, 'r, 'err>,
              f: _ -> Otm<_, 'r, 'err>,
@@ -381,7 +391,7 @@ module OtmComputationExpression =
             x
             |> Otm.addFrame (sprintf "%s in %s at %s" (callerName |> Utils.orUnknown) (callerFilePath |> Utils.orUnknown) (callerLineNumber |> Option.map string |> Utils.orUnknown))
 
-        member this.Zero() = this.Return ()
+        member this.Zero() = this.Return(())
 
         member __.Delay(f) = fun r -> Otm.run r (f ())
 
