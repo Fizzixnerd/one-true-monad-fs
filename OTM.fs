@@ -31,13 +31,27 @@ module Result =
     let sequenceAtoL xs = traverseAtoL id xs
 
 type Frame = string
+
+/// A stack trace specifically for F# computation expressions; note that while
+/// .ToString() returns a string representation of the stack that is right-ways
+/// up, it is actually _stored_ upside down, with the outer most frame at the
+/// top.
 type SymbolicStackTrace = SymbolicStackTrace of Frame list
+    with
+    static member rev (SymbolicStackTrace sst) = SymbolicStackTrace (List.rev sst)
+
+    override this.ToString() =
+        match SymbolicStackTrace.rev this with
+        | SymbolicStackTrace sst ->
+            let sprintList l =
+                let contents = (l |> List.fold (sprintf "%s    %s\n") "").TrimEnd('\n')
+                sprintf "[\n%s\n]" contents
+            sprintf "SymbolicStackTrace:\n%s" (sprintList sst)
 
 module SymbolicStackTrace =
     let cons frame (SymbolicStackTrace sst) = SymbolicStackTrace (frame :: sst)
-    let rev (SymbolicStackTrace sst) = SymbolicStackTrace (List.rev sst)
 
-/// An `error` along with a `StackTrace`
+/// An `'err` along with a `SymbolicStackTrace`
 type Traced<'err> =
     { error: 'err
       trace: StackTrace
@@ -46,8 +60,6 @@ type Traced<'err> =
 [<RequireQualifiedAccess>]
 module Traced =
 
-    /// A smart variable that uses the current build settings to determine if
-    /// StackTraces should be made with full source information
     let withSourceInfo =
         #if DEBUG
         true
@@ -61,7 +73,7 @@ module Traced =
           trace = x.trace
           strace = x.strace }
 
-    /// Create a `StackTrace` for the given `err` and return it in a
+    /// Create a `SymbolicStackTrace` for the given `err` and return it in a
     /// `Traced<'err>`
     let trace err : Traced<'err> =
         { error = err
@@ -124,6 +136,7 @@ module Otm =
     /// Reader `run` lifted to `Otm`
     let inline run r (x: Otm<_, _, _>) = Reader.run r x
 
+    /// Manually add a new stack frame to an Otm; mainly for internal use
     let addFrame (f: Frame) (x: Otm<_, 'r, 'err>) : Otm<_, 'r, 'err> =
         fun r ->
             async {
@@ -219,7 +232,8 @@ module Otm =
     /// `ignore` lifted to `Otm`
     let ignore (x: Otm<_, 'r, 'err>) : Otm<_, 'r, 'err> = x |> map ignore
 
-    /// Catch an exception if raised in an `Otm` and map it to an `'err`, preserving the `StackTrace`
+    /// Catch an exception if raised in an `Otm` and map it to an `'err`,
+    /// creating a new `SymbolicStackTrace`
     let catch f (x: Otm<_, 'r, 'err>) : Otm<_, 'r, 'err> =
         fun r ->
             run r x
@@ -230,16 +244,16 @@ module Otm =
                  | Choice2Of2 e ->
                      Error
                          { error = f e
-                           trace = StackTrace(e, Traced.withSourceInfo)
+                           trace = StackTrace(Traced.withSourceInfo)
                            strace = SymbolicStackTrace [] })
 
     // various lifting functions
 
-    /// Lift an `'err` into an `Otm`, creating a `StackTrace` for it at the call site
+    /// Lift an `'err` into an `Otm`, creating a `SymbolicStackTrace` for it at the call site
     /// of this function
     let throw x : Otm<_, 'r, 'err> = x |> Traced.trace |> Result.Error |> Async.retn |> Reader.retn
 
-    /// Lift an already `Traced<'err>` into an `Otm`, leaving the `StackTrace` as-is
+    /// Lift an already `Traced<'err>` into an `Otm`, leaving the `SymbolicStackTrace` as-is
     let rethrow x : Otm<_, 'r, 'err> = x |> Result.Error |> Async.retn |> Reader.retn
 
     /// Lift an `Async` computation into an `Otm`
@@ -255,7 +269,7 @@ module Otm =
         fun _ -> x |> Result.mapError Traced.trace |> Async.retn
 
     /// Obtain an `Otm` containing the `Result` portion of the computation, sans
-    /// the `'err`'s `StackTrace`
+    /// the `'err`'s `SymbolicStackTrace`
     let asResult (x: Otm<_, 'r, 'err>) : Otm<Result<'a, 'err>, 'r, 'err> =
         fun r ->
             async {
@@ -269,7 +283,7 @@ module Otm =
         fun _ -> x |> Async.map (Result.mapError Traced.trace)
 
     /// Obtain an `Otm` containing the `Async Result` portion of the
-    /// computation, without the StackTrace.
+    /// computation, without the `SymbolicStackTrace`.
     let asAsyncResult (x : Otm<_, 'r, 'err>) =
         fun r ->
             x
@@ -278,7 +292,7 @@ module Otm =
             |> retn
             |> run r
 
-    /// Lift a `Result<'a, Traced<'err>` into an `Otm`, leaving the `StackTrace`
+    /// Lift a `Result<'a, Traced<'err>` into an `Otm`, leaving the `SymbolicStackTrace`
     /// as-is
     let ofTracedResult (x: Result<_, Traced<'err>>) : Otm<_, 'r, 'err> =
         fun _ -> x |> Async.retn
@@ -291,7 +305,7 @@ module Otm =
     /// otm {
     ///     match! x |> Otm.asTracedResult with
     ///     | Ok x' -> return f x'
-    ///     | Error e -> printf "Error: %O with StackTrace %O" e.error e.trace
+    ///     | Error e -> printf "Error: %O with SymbolicStackTrace %O" e.error e.strace
     /// }
     /// ```
     let asTracedResult (x: Otm<_, 'r, 'err>) : Otm<Result<'a, Traced<'err>>, 'r, 'err> =
@@ -333,7 +347,7 @@ module Otm =
                 | Error tracedError -> return! run r (f tracedError.error)
             }
 
-    /// Like `Otm.bindError`, but with access to the `StackTrace` of the `'err`
+    /// Like `Otm.bindError`, but with access to the `SymbolicStackTrace` of the `'err`
     let bindTracedError (f: Traced<'err1> -> Otm<_, _, _>) (x: Otm<_, 'r, 'err1>) : Otm<_, 'r, 'err2> =
         fun r ->
             async {
@@ -364,14 +378,7 @@ module Utils =
 module OtmComputationExpression =
 
     type OtmBuilder() =
-        member inline __.Return
-            (x,
-            [<CallerMemberName>]?callerName: string,
-            [<CallerFilePath>]?callerFilePath: string,
-            [<CallerLineNumber>]?callerLineNumber: int) =
-            x
-            |> Otm.retn
-            // |> Otm.addFrame (sprintf "%s in %s at %s" (callerName |> Utils.orUnknown) (callerFilePath |> Utils.orUnknown) (callerLineNumber |> Option.map string |> Utils.orUnknown))
+        member inline __.Return(x) = x |> Otm.retn
 
         member inline __.Bind
             (x: Otm<_, 'r, 'err>,
@@ -381,7 +388,7 @@ module OtmComputationExpression =
              [<CallerLineNumber>]?callerLineNumber: int) =
             x
             |> Otm.bind f
-            |> Otm.addFrame (sprintf "%s in %s at %s" (callerName |> Utils.orUnknown) (callerFilePath |> Utils.orUnknown) (callerLineNumber |> Option.map string |> Utils.orUnknown))
+            |> Otm.addFrame (sprintf "%s in %s line %s" (callerName |> Utils.orUnknown) (callerFilePath |> Utils.orUnknown) (callerLineNumber |> Option.map string |> Utils.orUnknown))
 
         member inline __.ReturnFrom
             (x: Otm<_, 'r, 'err>,
@@ -389,9 +396,9 @@ module OtmComputationExpression =
              [<CallerFilePath>]?callerFilePath: string,
              [<CallerLineNumber>]?callerLineNumber: int) =
             x
-            |> Otm.addFrame (sprintf "%s in %s at %s" (callerName |> Utils.orUnknown) (callerFilePath |> Utils.orUnknown) (callerLineNumber |> Option.map string |> Utils.orUnknown))
+            |> Otm.addFrame (sprintf "%s in %s line %s" (callerName |> Utils.orUnknown) (callerFilePath |> Utils.orUnknown) (callerLineNumber |> Option.map string |> Utils.orUnknown))
 
-        member this.Zero() = this.Return(())
+        member this.Zero() = this.Return ()
 
         member __.Delay(f) = fun r -> Otm.run r (f ())
 
